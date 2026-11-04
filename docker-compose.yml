@@ -1,0 +1,110 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - '4000'
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      MONGODB_URI: ${MONGODB_URI_DOCKER:-mongodb://mongo:27017/scholargraph}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-7}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
+      MAX_FILES_PER_UPLOAD: ${MAX_FILES_PER_UPLOAD:-10}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      REQUIRE_CLAMAV: ${REQUIRE_CLAMAV:-false}
+      CLAMAV_HOST: ${CLAMAV_HOST:-}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+      OCR_LANG: ${OCR_LANG:-eng}
+      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-20}
+      OCR_TIMEOUT_MS: ${OCR_TIMEOUT_MS:-30000}
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}
+      CROSSREF_MAILTO: ${CROSSREF_MAILTO:-}
+      CROSSREF_MIN_INTERVAL_MS: ${CROSSREF_MIN_INTERVAL_MS:-1000}
+      SCHOLARLY_CACHE_TTL_MS: ${SCHOLARLY_CACHE_TTL_MS:-300000}
+    volumes:
+      - uploads:/app/storage/uploads
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/api/health/ready').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:8080:80'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ['production']
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.adminCommand("ping").ok']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mongo-data:
+  uploads:
+  caddy-data:
+  caddy-config:

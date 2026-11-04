@@ -1,0 +1,26 @@
+services:
+  api:
+    environment:
+      REQUIRE_CLAMAV: 'true'
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+    depends_on:
+      clamav:
+        condition: service_healthy
+
+  clamav:
+    image: clamav/clamav:stable
+    restart: unless-stopped
+    expose:
+      - '3310'
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ['CMD-SHELL', 'clamdscan --ping=1 >/dev/null 2>&1']
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+volumes:
+  clamav-data:
