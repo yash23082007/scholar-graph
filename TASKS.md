@@ -49,10 +49,10 @@
 - [x] Owner-scoped MongoDB queries, scrypt passwords, opaque HttpOnly sessions, CSRF origin checks, and upload URL SSRF validation.
 - [x] MongoDB-shared auth/research rate limits with expiring buckets.
 - [x] Append-only audit records for authenticated write routes; structured JSON request/error logs and request IDs.
-- [x] Separate liveness/readiness endpoints, Docker Compose, Nginx proxy, optional Caddy HTTPS, optional ClamAV overlay, and CI checks.
+- [x] Separate liveness/readiness endpoints, Docker Compose, Nginx proxy, optional Caddy HTTPS, optional ClamAV overlay, token-protected Prometheus request metrics, and CI checks.
 - [x] Document MongoDB backup/restore, secret rotation, deployment configuration, and current scaling limits.
 - [ ] Cross-user authorization integration tests against an isolated test database.
-- [ ] Metrics exporter, production dashboard, external error tracking, and alerting.
+- [ ] Production dashboard, external error tracking, and alerting.
 - [ ] Account verification, password reset, two-factor authentication, and self-service account deletion.
 - [ ] CI deployment/release workflow and documented rollback procedure.
 - [ ] Run Docker Compose and HTTPS deployment verification in an environment with Docker access.

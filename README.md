@@ -10,7 +10,7 @@ ScholarGraph is an evidence-first research workspace by Yash. Researchers can in
 - Evidence-based document questions, Tavily web search, OpenAlex and Crossref metadata, and Groq/Gemini model adapters with fallback.
 - Research runs with stored stage output, evidence records, cancellation, server-sent progress updates, and event replay using `Last-Event-ID`.
 - A Markdown editor and preview, automatic draft saving, version history and line comparison, evidence links, Markdown download, and browser print-to-PDF.
-- MongoDB-backed rate limits for auth and expensive research requests, audit records for signed-in changes, request IDs, JSON request/error logs, and separate liveness/readiness checks.
+- MongoDB-backed rate limits for auth and expensive research requests, audit records for signed-in changes, request IDs, JSON request/error logs, a token-protected Prometheus metrics endpoint, and separate liveness/readiness checks.
 - Docker Compose, an Nginx reverse proxy, an optional Caddy HTTPS profile, an optional ClamAV service, and CI checks.
 
 Source labels distinguish extracted file text, web excerpts, abstracts, and metadata-only records. A matching citation ID only confirms that the source exists in the run’s evidence; readers should inspect the linked passage to decide whether it supports a claim.
