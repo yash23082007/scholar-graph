@@ -169,6 +169,101 @@
   font: 700 25px Manrope;
   color: #e9ebf3;
 }
+.evidence-signal {
+  position: relative;
+  min-height: 198px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  overflow: hidden;
+  margin-top: 15px;
+  padding: 25px 30px;
+  border: 1px solid #cbd9ce;
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 85% 50%, rgba(181, 207, 190, 0.32), transparent 28%),
+    linear-gradient(120deg, #f8faf5, #eef4ed);
+}
+.signal-copy {
+  max-width: 610px;
+}
+.signal-copy h2 {
+  margin: 11px 0 8px;
+  color: var(--sg-ink);
+  font:
+    500 24px Georgia,
+    'Times New Roman',
+    serif;
+  letter-spacing: -0.03em;
+}
+.signal-copy p {
+  max-width: 590px;
+  margin: 0;
+  color: var(--sg-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.signal-meta {
+  display: flex;
+  gap: 22px;
+  margin-top: 18px;
+  color: var(--sg-muted);
+  font-size: 10px;
+}
+.signal-meta strong {
+  color: var(--sg-green-deep);
+  font: 700 14px Manrope;
+}
+.signal-orbit {
+  position: relative;
+  width: 150px;
+  height: 150px;
+  flex: 0 0 150px;
+  margin-right: 22px;
+}
+.signal-orbit-ring {
+  position: absolute;
+  inset: 20px;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  border: 1px solid #8eae99;
+  border-radius: 50%;
+  background: rgba(255, 255, 251, 0.72);
+  box-shadow: 0 0 0 12px rgba(255, 255, 255, 0.26);
+}
+.signal-orbit-ring strong {
+  color: var(--sg-green-deep);
+  font: 700 23px Manrope;
+}
+.signal-orbit-ring span {
+  color: var(--sg-muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.orbit-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 2px solid #eef4ed;
+  border-radius: 50%;
+  background: var(--sg-copper);
+}
+.orbit-dot-one {
+  top: 4px;
+  left: 67px;
+}
+.orbit-dot-two {
+  right: 2px;
+  bottom: 40px;
+  background: var(--sg-green);
+}
+.orbit-dot-three {
+  bottom: 6px;
+  left: 30px;
+  background: #7893a0;
+}
 .overview-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -730,6 +825,27 @@
   }
   .overview-stats strong {
     font-size: 20px;
+  }
+  .evidence-signal {
+    align-items: flex-start;
+    padding: 21px;
+  }
+  .signal-orbit {
+    position: absolute;
+    top: 18px;
+    right: -25px;
+    transform: scale(0.7);
+    transform-origin: top right;
+  }
+  .signal-copy {
+    padding-right: 58px;
+  }
+  .signal-copy h2 {
+    font-size: 21px;
+  }
+  .signal-meta {
+    display: grid;
+    gap: 8px;
   }
   .document-toolbar {
     align-items: stretch;

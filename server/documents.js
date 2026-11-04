@@ -167,7 +167,10 @@ export async function extractDocument(file) {
     if (process.env.OCR_ENABLED === 'true' && emptyPages.length) {
       const maxPages = Math.min(Math.max(Number(process.env.OCR_MAX_PAGES || 20), 1), 100);
       const pagesToScan = emptyPages.slice(0, maxPages);
-      const timeoutMs = Math.min(Math.max(Number(process.env.OCR_TIMEOUT_MS || 30000), 1000), 60000);
+      const timeoutMs = Math.min(
+        Math.max(Number(process.env.OCR_TIMEOUT_MS || 30000), 1000),
+        60000,
+      );
       const directory = await mkdtemp(path.join(os.tmpdir(), 'scholargraph-ocr-'));
       let unavailable = false;
       try {
@@ -196,7 +199,9 @@ export async function extractDocument(file) {
               [imagePath, 'stdout', '-l', process.env.OCR_LANG || 'eng'],
               { timeout: timeoutMs, maxBuffer: 2 * 1024 * 1024 },
             );
-            page.text = String(result.stdout || '').replace(/\s+/g, ' ').trim();
+            page.text = String(result.stdout || '')
+              .replace(/\s+/g, ' ')
+              .trim();
           } catch {
             unavailable = true;
             break;
@@ -205,7 +210,9 @@ export async function extractDocument(file) {
       } finally {
         await rm(directory, { recursive: true, force: true });
       }
-      const scannedPageNumbers = new Set(pagesToScan.filter((page) => page.text.trim()).map((page) => page.page));
+      const scannedPageNumbers = new Set(
+        pagesToScan.filter((page) => page.text.trim()).map((page) => page.page),
+      );
       for (let index = warnings.length - 1; index >= 0; index -= 1) {
         const match = warnings[index].match(/^Page (\d+) contains no selectable text/);
         if (match && scannedPageNumbers.has(Number(match[1]))) warnings.splice(index, 1);
@@ -213,7 +220,9 @@ export async function extractDocument(file) {
       if (unavailable)
         warnings.push('OCR could not run. Install Poppler and Tesseract, then retry indexing.');
       if (emptyPages.length > pagesToScan.length)
-        warnings.push(`OCR page limit reached; ${emptyPages.length - pagesToScan.length} scanned pages remain unprocessed.`);
+        warnings.push(
+          `OCR page limit reached; ${emptyPages.length - pagesToScan.length} scanned pages remain unprocessed.`,
+        );
     }
     return { pages, warnings: warnings.slice(0, 12), format: 'PDF' };
   }

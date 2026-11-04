@@ -76,7 +76,13 @@ export function makeEvidenceAnswer(question, chunks) {
     url: chunk.url || null,
     sourceType: chunk.sourceType || 'uploaded_document',
     retrievedAt: chunk.retrievedAt || null,
-    contentCoverage: chunk.contentCoverage || (chunk.sourceType === 'academic_record' ? 'metadata_only' : chunk.sourceType === 'web_page_extract' ? 'web_page_extract' : 'user_uploaded_full_text'),
+    contentCoverage:
+      chunk.contentCoverage ||
+      (chunk.sourceType === 'academic_record'
+        ? 'metadata_only'
+        : chunk.sourceType === 'web_page_extract'
+          ? 'web_page_extract'
+          : 'user_uploaded_full_text'),
     sourceProvider: chunk.sourceProvider || null,
     doi: chunk.doi || null,
     authors: chunk.authors || [],

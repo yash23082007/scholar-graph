@@ -10,6 +10,7 @@ import { z } from 'zod';
 import {
   AgentPrompt,
   AgentRun,
+  AuditLog,
   Document,
   DocumentChunk,
   DraftVersion,
@@ -41,8 +42,15 @@ import {
   persistUploadedFile,
 } from './storage.js';
 import { hashPassword, hashToken, newSessionToken, verifyPassword } from './security.js';
+import { consumeRateLimit, rateLimitKey } from './rate-limit.js';
 
 const app = express();
+app.set(
+  'trust proxy',
+  process.env.NODE_ENV === 'production'
+    ? Math.max(0, Number(process.env.TRUST_PROXY_HOPS || 2))
+    : false,
+);
 const port = Number(process.env.PORT || 4000);
 const appUrl = process.env.APP_URL || 'http://localhost:5173';
 const sessionDays = Math.min(Math.max(Number(process.env.SESSION_TTL_DAYS || 7), 1), 30);
@@ -50,6 +58,7 @@ const sessionMs = sessionDays * 24 * 60 * 60 * 1000;
 const isProduction = process.env.NODE_ENV === 'production';
 const cookieName = isProduction ? '__Host-scholargraph_session' : 'scholargraph_session';
 let mongoReady = false;
+const requestMetrics = new Map();
 const uploadRoot = path.resolve(process.cwd(), 'storage', 'uploads');
 const maxUploadBytes =
   Math.min(Math.max(Number(process.env.MAX_UPLOAD_MB || 20), 1), 100) * 1024 * 1024;
@@ -148,41 +157,104 @@ const uploadFiles = multer({
 app.disable('x-powered-by');
 app.use((req, res, next) => {
   req.requestId = randomUUID();
+  const startedAt = process.hrtime.bigint();
   res.setHeader('X-Request-Id', req.requestId);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.on('finish', () => {
+    const routePattern = req.route?.path ? String(req.route.path) : '';
+    const routePrefix = req.originalUrl.startsWith('/api/v1/') ? '/api/v1' : req.baseUrl || '';
+    const route = routePattern
+      ? routePattern.startsWith('/api/v1/')
+        ? routePattern
+        : `${routePrefix}${routePattern}`
+      : req.path.startsWith('/api/health')
+        ? req.path
+        : 'unmatched';
+    const log = {
+      level: res.statusCode >= 500 ? 'error' : 'info',
+      event: 'http.request',
+      requestId: req.requestId,
+      method: req.method,
+      route,
+      statusCode: res.statusCode,
+      durationMs: Number(process.hrtime.bigint() - startedAt) / 1e6,
+      ...(req.user?._id || req.auditActorId
+        ? { actorId: String(req.user?._id || req.auditActorId) }
+        : {}),
+    };
+    const metricKey = `${req.method}\u0000${route}\u0000${res.statusCode}`;
+    const metric = requestMetrics.get(metricKey) || { count: 0, durationMs: 0 };
+    metric.count += 1;
+    metric.durationMs += log.durationMs;
+    requestMetrics.set(metricKey, metric);
+    console.log(JSON.stringify(log));
+    const actorId = req.user?._id || req.auditActorId;
+    if (
+      actorId &&
+      req.originalUrl.startsWith('/api/v1/') &&
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) &&
+      req.route?.path
+    ) {
+      void AuditLog.create({
+        actorId,
+        requestId: req.requestId,
+        action: `${req.method} ${route}`,
+        statusCode: res.statusCode,
+      }).catch((err) =>
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            event: 'audit.write_failed',
+            requestId: req.requestId,
+            message: err?.message || 'Audit log could not be stored',
+          }),
+        ),
+      );
+    }
+  });
   next();
 });
 app.use(
   cors({
     origin: appUrl,
     credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type'],
   }),
 );
 app.use(express.json({ limit: '1mb', strict: true }));
 
-const attempts = new Map();
 function rateLimit({ windowMs = 15 * 60 * 1000, max = 20 } = {}) {
-  return (req, res, next) => {
-    const key = `${req.ip}:${req.path}`;
-    const now = Date.now();
-    const entry = attempts.get(key);
-    if (!entry || entry.until <= now) attempts.set(key, { count: 1, until: now + windowMs });
-    else entry.count += 1;
-    const current = attempts.get(key);
-    if (current.count > max)
-      return error(res, 429, 'RATE_LIMITED', 'Too many requests. Try again shortly.');
-    next();
+  return async (req, res, next) => {
+    if (!mongoReady) return next();
+    try {
+      const current = await consumeRateLimit(rateLimitKey(req.ip, req.path), { windowMs });
+      const remaining = Math.max(0, max - current.count);
+      res.setHeader('RateLimit-Limit', max);
+      res.setHeader('RateLimit-Remaining', remaining);
+      res.setHeader('RateLimit-Reset', Math.ceil(current.resetAt.getTime() / 1000));
+      if (current.count > max) {
+        res.setHeader(
+          'Retry-After',
+          Math.max(1, Math.ceil((current.resetAt.getTime() - Date.now()) / 1000)),
+        );
+        return error(
+          res,
+          429,
+          'RATE_LIMITED',
+          'Too many requests. Try again shortly.',
+          req.requestId,
+        );
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
   };
 }
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of attempts) if (entry.until <= now) attempts.delete(key);
-}, 60_000).unref();
 
 function error(res, status, code, message, requestId) {
   return res.status(status).json({ error: { code, message, ...(requestId ? { requestId } : {}) } });
@@ -269,7 +341,7 @@ async function authenticate(req, res, next) {
   }
 }
 function requireSameOrigin(req, res, next) {
-  if (!['POST', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
   const origin = req.get('origin');
   if (!origin)
     return error(res, 403, 'ORIGIN_REQUIRED', 'A same-origin request is required.', req.requestId);
@@ -310,6 +382,25 @@ app.get('/api/health/ready', (_req, res) => {
   const ready = Object.values(checks).every(Boolean);
   return res.status(ready ? 200 : 503).json({ ok: ready, checks, storage, scanner });
 });
+app.get('/api/metrics', (req, res) => {
+  const token = process.env.METRICS_TOKEN;
+  if (!token) return res.status(404).end();
+  if (req.get('authorization') !== `Bearer ${token}`) return res.status(401).end();
+  const lines = [
+    '# HELP http_requests_total Completed HTTP requests.',
+    '# TYPE http_requests_total counter',
+    '# HELP http_request_duration_seconds Request duration in seconds.',
+    '# TYPE http_request_duration_seconds summary',
+  ];
+  for (const [key, metric] of requestMetrics) {
+    const [method, route, status] = key.split('\u0000');
+    const labels = `method="${method}",route="${route.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}",status="${status}"`;
+    lines.push(`http_requests_total{${labels}} ${metric.count}`);
+    lines.push(`http_request_duration_seconds_sum{${labels}} ${metric.durationMs / 1000}`);
+    lines.push(`http_request_duration_seconds_count{${labels}} ${metric.count}`);
+  }
+  res.type('text/plain; version=0.0.4; charset=utf-8').send(`${lines.join('\n')}\n`);
+});
 app.get('/api/v1/health', (_req, res) =>
   res.json({ ok: true, database: mongoReady ? 'connected' : 'unavailable' }),
 );
@@ -339,6 +430,7 @@ app.post(
         name,
         passwordHash: await hashPassword(password),
       });
+      req.auditActorId = user._id;
       const workspace = await Workspace.create({
         ownerId: user._id,
         name: workspaceName || `${name}'s research`,
@@ -400,6 +492,7 @@ app.post(
           req.requestId,
         );
       const token = newSessionToken();
+      req.auditActorId = user._id;
       await Session.create({
         userId: user._id,
         tokenHash: hashToken(token),
@@ -637,6 +730,7 @@ api.get('/workspaces/:workspaceId/documents', async (req, res, next) => {
 
 api.post(
   '/workspaces/:workspaceId/documents',
+  rateLimit({ windowMs: 60 * 60 * 1000, max: 20 }),
   async (req, res, next) => {
     try {
       if (!mongoose.isValidObjectId(req.params.workspaceId))
@@ -1290,98 +1384,103 @@ api.get('/workspaces/:workspaceId/runs', async (req, res, next) => {
   }
 });
 
-api.post('/workspaces/:workspaceId/runs', parseBody(runSchema), async (req, res, next) => {
-  try {
-    if (!mongoose.isValidObjectId(req.params.workspaceId))
-      return error(res, 400, 'INVALID_ID', 'Workspace ID is invalid.', req.requestId);
-    if (!(await Workspace.exists({ _id: req.params.workspaceId, ownerId: req.user._id })))
-      return error(res, 404, 'NOT_FOUND', 'Workspace not found.', req.requestId);
-    for (const provider of Object.values(req.validatedBody.agentProviders || {})) {
-      if (provider === 'groq' && !process.env.GROQ_API_KEY)
+api.post(
+  '/workspaces/:workspaceId/runs',
+  rateLimit({ windowMs: 60 * 60 * 1000, max: 12 }),
+  parseBody(runSchema),
+  async (req, res, next) => {
+    try {
+      if (!mongoose.isValidObjectId(req.params.workspaceId))
+        return error(res, 400, 'INVALID_ID', 'Workspace ID is invalid.', req.requestId);
+      if (!(await Workspace.exists({ _id: req.params.workspaceId, ownerId: req.user._id })))
+        return error(res, 404, 'NOT_FOUND', 'Workspace not found.', req.requestId);
+      for (const provider of Object.values(req.validatedBody.agentProviders || {})) {
+        if (provider === 'groq' && !process.env.GROQ_API_KEY)
+          return error(
+            res,
+            400,
+            'PROVIDER_NOT_CONFIGURED',
+            'GROQ_API_KEY is not configured on the server.',
+            req.requestId,
+          );
+        if (provider === 'gemini' && !process.env.GEMINI_API_KEY)
+          return error(
+            res,
+            400,
+            'PROVIDER_NOT_CONFIGURED',
+            'GEMINI_API_KEY is not configured on the server.',
+            req.requestId,
+          );
+      }
+      const selectedIds = req.validatedBody.documentIds;
+      if (selectedIds.some((id) => !mongoose.isValidObjectId(id)))
         return error(
           res,
           400,
-          'PROVIDER_NOT_CONFIGURED',
-          'GROQ_API_KEY is not configured on the server.',
+          'INVALID_DOCUMENT_ID',
+          'One or more document IDs are invalid.',
           req.requestId,
         );
-      if (provider === 'gemini' && !process.env.GEMINI_API_KEY)
-        return error(
-          res,
-          400,
-          'PROVIDER_NOT_CONFIGURED',
-          'GEMINI_API_KEY is not configured on the server.',
-          req.requestId,
-        );
-    }
-    const selectedIds = req.validatedBody.documentIds;
-    if (selectedIds.some((id) => !mongoose.isValidObjectId(id)))
-      return error(
-        res,
-        400,
-        'INVALID_DOCUMENT_ID',
-        'One or more document IDs are invalid.',
-        req.requestId,
-      );
-    if (selectedIds.length) {
-      const readyCount = await Document.countDocuments({
-        _id: { $in: selectedIds },
+      if (selectedIds.length) {
+        const readyCount = await Document.countDocuments({
+          _id: { $in: selectedIds },
+          workspaceId: req.params.workspaceId,
+          ownerId: req.user._id,
+          status: 'ready',
+        });
+        if (readyCount !== new Set(selectedIds).size)
+          return error(
+            res,
+            400,
+            'DOCUMENTS_NOT_READY',
+            'Some selected documents are unavailable or not indexed.',
+            req.requestId,
+          );
+      }
+      const savedPrompts = await AgentPrompt.find({
         workspaceId: req.params.workspaceId,
         ownerId: req.user._id,
-        status: 'ready',
+      }).lean();
+      const promptSnapshots = Object.fromEntries(
+        agentRoles.map((agent) => {
+          const saved = savedPrompts.find((item) => item.agent === agent);
+          return [
+            agent,
+            { prompt: saved?.prompt || defaultPrompts[agent], version: saved?.version || 1 },
+          ];
+        }),
+      );
+      const run = await ResearchRun.create({
+        workspaceId: req.params.workspaceId,
+        ownerId: req.user._id,
+        task: req.validatedBody.task,
+        outputType: req.validatedBody.outputType,
+        selectedDocumentIds: selectedIds,
+        sourceMode: req.validatedBody.sourceMode,
+        agentProviders: req.validatedBody.agentProviders || {},
+        promptSnapshots,
+        status: 'queued',
+        currentStage: 'queued',
       });
-      if (readyCount !== new Set(selectedIds).size)
-        return error(
-          res,
-          400,
-          'DOCUMENTS_NOT_READY',
-          'Some selected documents are unavailable or not indexed.',
-          req.requestId,
-        );
+      await addRunEvent(run._id, 'run.created', {
+        status: 'queued',
+        payload: { task: run.task, selectedDocumentIds: selectedIds },
+      });
+      scheduleRun(run._id);
+      res.status(202).json({
+        run: {
+          id: String(run._id),
+          task: run.task,
+          status: run.status,
+          currentStage: run.currentStage,
+          createdAt: run.createdAt,
+        },
+      });
+    } catch (err) {
+      next(err);
     }
-    const savedPrompts = await AgentPrompt.find({
-      workspaceId: req.params.workspaceId,
-      ownerId: req.user._id,
-    }).lean();
-    const promptSnapshots = Object.fromEntries(
-      agentRoles.map((agent) => {
-        const saved = savedPrompts.find((item) => item.agent === agent);
-        return [
-          agent,
-          { prompt: saved?.prompt || defaultPrompts[agent], version: saved?.version || 1 },
-        ];
-      }),
-    );
-    const run = await ResearchRun.create({
-      workspaceId: req.params.workspaceId,
-      ownerId: req.user._id,
-      task: req.validatedBody.task,
-      outputType: req.validatedBody.outputType,
-      selectedDocumentIds: selectedIds,
-      sourceMode: req.validatedBody.sourceMode,
-      agentProviders: req.validatedBody.agentProviders || {},
-      promptSnapshots,
-      status: 'queued',
-      currentStage: 'queued',
-    });
-    await addRunEvent(run._id, 'run.created', {
-      status: 'queued',
-      payload: { task: run.task, selectedDocumentIds: selectedIds },
-    });
-    scheduleRun(run._id);
-    res.status(202).json({
-      run: {
-        id: String(run._id),
-        task: run.task,
-        status: run.status,
-        currentStage: run.currentStage,
-        createdAt: run.createdAt,
-      },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
 api.get('/runs/:runId', async (req, res, next) => {
   try {
@@ -1552,6 +1651,35 @@ api.get('/runs/:runId/drafts', async (req, res, next) => {
         createdAt: draft.createdAt,
       })),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+api.put('/runs/:runId/draft', parseBody(draftSchema), async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.runId))
+      return error(res, 400, 'INVALID_ID', 'Run ID is invalid.', req.requestId);
+    const run = await ResearchRun.findOne({ _id: req.params.runId, ownerId: req.user._id });
+    if (!run) return error(res, 404, 'NOT_FOUND', 'Run not found.', req.requestId);
+    if (run.status !== 'completed')
+      return error(
+        res,
+        409,
+        'REPORT_NOT_READY',
+        'The report can be edited after generation is complete.',
+        req.requestId,
+      );
+    const markdown = req.validatedBody.markdown;
+    if (run.markdown === markdown)
+      return res.json({ saved: true, unchanged: true, updatedAt: run.updatedAt });
+    run.markdown = markdown;
+    await run.save();
+    await addRunEvent(run._id, 'draft.autosaved', {
+      status: 'completed',
+      payload: { updatedAt: run.updatedAt },
+    });
+    res.json({ saved: true, unchanged: false, updatedAt: run.updatedAt });
   } catch (err) {
     next(err);
   }

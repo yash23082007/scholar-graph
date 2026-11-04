@@ -39,6 +39,26 @@ const sessionSchema = new Schema(
   { timestamps: true },
 );
 
+const rateLimitEntrySchema = new Schema(
+  {
+    _id: { type: String, required: true },
+    count: { type: Number, required: true },
+    resetAt: { type: Date, required: true, index: { expires: 0 } },
+  },
+  { versionKey: false },
+);
+
+const auditLogSchema = new Schema(
+  {
+    actorId: { type: Schema.Types.ObjectId, default: null, index: true },
+    requestId: { type: String, required: true, index: true },
+    action: { type: String, required: true },
+    statusCode: { type: Number, required: true },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } },
+);
+auditLogSchema.index({ createdAt: -1 });
+
 const workspaceSchema = new Schema(
   {
     ownerId: {
@@ -215,6 +235,9 @@ draftVersionSchema.index({ runId: 1, version: 1 }, { unique: true });
 
 export const User = mongoose.models.User || mongoose.model('User', userSchema);
 export const Session = mongoose.models.Session || mongoose.model('Session', sessionSchema);
+export const RateLimitEntry =
+  mongoose.models.RateLimitEntry || mongoose.model('RateLimitEntry', rateLimitEntrySchema);
+export const AuditLog = mongoose.models.AuditLog || mongoose.model('AuditLog', auditLogSchema);
 export const Workspace = mongoose.models.Workspace || mongoose.model('Workspace', workspaceSchema);
 export const Document = mongoose.models.Document || mongoose.model('Document', documentSchema);
 export const DocumentChunk =

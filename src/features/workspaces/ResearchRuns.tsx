@@ -1,6 +1,14 @@
-import { FormEvent, MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  FormEvent,
+  MouseEvent as ReactMouseEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
+import { diffLines } from 'diff';
 import { api, Workspace } from '../../lib/api';
 import './ResearchRuns.css';
 
@@ -133,6 +141,7 @@ export default function ResearchRuns({
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [agentRuns, setAgentRuns] = useState<AgentItem[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [comparisonDraft, setComparisonDraft] = useState<Draft | null>(null);
   const [creating, setCreating] = useState(false);
   const [task, setTask] = useState('');
   const [outputType, setOutputType] = useState('literature_review');
@@ -148,6 +157,7 @@ export default function ResearchRuns({
   const [editorValue, setEditorValue] = useState('');
   const [view, setView] = useState<'report' | 'evidence' | 'agents' | 'history'>('report');
   const [busy, setBusy] = useState(false);
+  const [draftSaveStatus, setDraftSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [preview, setPreview] = useState(false);
@@ -155,6 +165,18 @@ export default function ResearchRuns({
   const [selectedEvidenceId, setSelectedEvidenceId] = useState('');
   const selectedDocsTouched = useRef(false);
   const knownDocumentIds = useRef(new Set<string>());
+  const loadedDraftRunId = useRef('');
+  const lastSavedDraft = useRef('');
+  const editorValueRef = useRef('');
+  const detailRequestId = useRef(0);
+  const draftRequestId = useRef(0);
+  const runListRequestId = useRef(0);
+  const autosaveQueue = useRef<Promise<void>>(Promise.resolve());
+
+  function updateEditorValue(markdown: string) {
+    editorValueRef.current = markdown;
+    setEditorValue(markdown);
+  }
   useEffect(() => {
     const ready = documents.filter((doc) => doc.status === 'ready').map((doc) => doc.id);
     const added = ready.filter((id) => !knownDocumentIds.current.has(id));
@@ -164,21 +186,41 @@ export default function ResearchRuns({
   }, [documents]);
 
   async function loadRuns() {
-    const result = await api<{ runs: RunListItem[] }>(`/workspaces/${workspace.id}/runs`);
+    const requestId = ++runListRequestId.current;
+    const workspaceId = workspace.id;
+    const result = await api<{ runs: RunListItem[] }>(`/workspaces/${workspaceId}/runs`);
+    if (requestId !== runListRequestId.current) return;
     setRuns(result.runs);
-    if (!selectedId && result.runs[0]) setSelectedId(result.runs[0].id);
+    if (!result.runs.some((run) => run.id === selectedId)) setSelectedId(result.runs[0]?.id || '');
   }
   async function loadDetail(id: string) {
+    const requestId = ++detailRequestId.current;
     const result = await api<{ run: RunDetail; agents: AgentItem[] }>(`/runs/${id}`);
+    if (requestId !== detailRequestId.current) return;
     setDetail(result.run);
     setAgentRuns(result.agents);
-    setEditorValue(result.run.markdown || '');
+    const hasLocalEdits =
+      loadedDraftRunId.current === id && editorValueRef.current !== lastSavedDraft.current;
+    if (!hasLocalEdits) {
+      const markdown = result.run.markdown || '';
+      loadedDraftRunId.current = id;
+      lastSavedDraft.current = markdown;
+      updateEditorValue(markdown);
+      setDraftSaveStatus('saved');
+    }
   }
   async function loadDrafts(id: string) {
+    const requestId = ++draftRequestId.current;
     const result = await api<{ drafts: Draft[] }>(`/runs/${id}/drafts`);
-    setDrafts(result.drafts);
+    if (requestId === draftRequestId.current) setDrafts(result.drafts);
   }
   useEffect(() => {
+    setRuns([]);
+    setSelectedId('');
+    setDetail(null);
+    setDrafts([]);
+    detailRequestId.current += 1;
+    draftRequestId.current += 1;
     api<{ providers: { groq: boolean; gemini: boolean } }>('/providers')
       .then((value) => setProviders(value.providers))
       .catch(() => {});
@@ -186,11 +228,45 @@ export default function ResearchRuns({
   }, [workspace.id]);
   useEffect(() => {
     if (selectedId) void loadDetail(selectedId).catch((err) => setError(err.message));
-    else setDetail(null);
+    else {
+      detailRequestId.current += 1;
+      setDetail(null);
+    }
   }, [selectedId]);
   useEffect(() => {
     if (selectedId) void loadDrafts(selectedId).catch(() => {});
   }, [selectedId, detail?.updatedAt]);
+  useEffect(() => {
+    if (
+      !detail ||
+      detail.status !== 'completed' ||
+      loadedDraftRunId.current !== detail.id ||
+      editorValue === lastSavedDraft.current
+    )
+      return;
+    const runId = detail.id;
+    const markdown = editorValue;
+    const timer = window.setTimeout(async () => {
+      setDraftSaveStatus('saving');
+      const save = async () => {
+        try {
+          await api(`/runs/${runId}/draft`, {
+            method: 'PUT',
+            body: JSON.stringify({ markdown }),
+          });
+          if (loadedDraftRunId.current === runId) {
+            lastSavedDraft.current = markdown;
+            setDraftSaveStatus(editorValueRef.current === markdown ? 'saved' : 'saving');
+          }
+        } catch {
+          if (loadedDraftRunId.current === runId) setDraftSaveStatus('error');
+        }
+      };
+      autosaveQueue.current = autosaveQueue.current.then(save, save);
+      await autosaveQueue.current;
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [editorValue, detail?.id, detail?.status]);
   useEffect(() => {
     if (!selectedId || !detail || ['completed', 'failed', 'cancelled'].includes(detail.status))
       return;
@@ -219,7 +295,10 @@ export default function ResearchRuns({
       stream.close();
     };
   }, [selectedId, detail?.status]);
-  const evidenceIds = useMemo(() => new Set(detail?.evidence.map((item) => item.id) || []), [detail?.evidence]);
+  const evidenceIds = useMemo(
+    () => new Set(detail?.evidence.map((item) => item.id) || []),
+    [detail?.evidence],
+  );
   const citationIds = useMemo(
     () => [...new Set([...editorValue.matchAll(/\[(E\d+)\]/g)].map((match) => match[1]))],
     [editorValue],
@@ -228,6 +307,22 @@ export default function ResearchRuns({
   const previewHtml = useMemo(
     () => linkEvidenceReferences(marked.parse(editorValue || '') as string, evidenceIds),
     [editorValue, evidenceIds],
+  );
+  const draftDiff = useMemo(
+    () =>
+      comparisonDraft
+        ? diffLines(comparisonDraft.markdown, editorValue).flatMap((part) =>
+            part.value
+              .replace(/\n$/, '')
+              .split('\n')
+              .map((line) => ({
+                line,
+                added: Boolean(part.added),
+                removed: Boolean(part.removed),
+              })),
+          )
+        : [],
+    [comparisonDraft, editorValue],
   );
   useEffect(() => {
     if (view !== 'evidence' || !selectedEvidenceId) return;
@@ -298,14 +393,24 @@ export default function ResearchRuns({
     }
   }
   async function saveDraft() {
-    if (!selectedId || !detail) return;
+    if (!selectedId || !detail || detail.id !== selectedId) return;
     setBusy(true);
     setError('');
     try {
-      await api(`/runs/${selectedId}/drafts`, {
-        method: 'POST',
-        body: JSON.stringify({ markdown: editorValue }),
-      });
+      const markdown = editorValueRef.current;
+      const saveVersion = () =>
+        api(`/runs/${selectedId}/drafts`, {
+          method: 'POST',
+          body: JSON.stringify({ markdown }),
+        });
+      const versionSave = autosaveQueue.current.then(saveVersion, saveVersion);
+      autosaveQueue.current = versionSave.then(
+        () => undefined,
+        () => undefined,
+      );
+      await versionSave;
+      lastSavedDraft.current = markdown;
+      setDraftSaveStatus(editorValueRef.current === markdown ? 'saved' : 'saving');
       await loadDetail(selectedId);
       await loadDrafts(selectedId);
       setMessage('A new draft version was saved.');
@@ -326,6 +431,11 @@ export default function ResearchRuns({
       .toLowerCase()}.md`;
     anchor.click();
     URL.revokeObjectURL(url);
+  }
+
+  function printReport() {
+    setPreview(true);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.print()));
   }
 
   return (
@@ -511,7 +621,10 @@ export default function ResearchRuns({
               </div>
               <div className="run-live-actions">
                 {['queued', 'running'].includes(detail.status) && (
-                  <span className={`live-update-indicator ${liveUpdates ? 'connected' : ''}`} role="status">
+                  <span
+                    className={`live-update-indicator ${liveUpdates ? 'connected' : ''}`}
+                    role="status"
+                  >
                     <i /> {liveUpdates ? 'Live updates' : 'Reconnecting'}
                   </span>
                 )}
@@ -581,7 +694,7 @@ export default function ResearchRuns({
                       {preview ? 'Edit report' : 'Read view'}
                     </button>
                     <button onClick={downloadMarkdown}>Download Markdown</button>
-                    <button onClick={() => window.print()}>Print / save PDF</button>
+                    <button onClick={printReport}>Print / save PDF</button>
                     <button
                       className="save-draft"
                       disabled={busy || detail.status !== 'completed'}
@@ -591,7 +704,17 @@ export default function ResearchRuns({
                     </button>
                   </div>
                 </div>
-                <div className={`citation-check ${unmatchedCitationIds.length ? 'needs-review' : ''}`}>
+                <div className={`draft-save-status ${draftSaveStatus}`} aria-live="polite">
+                  <i />
+                  {draftSaveStatus === 'saving'
+                    ? 'Saving changes…'
+                    : draftSaveStatus === 'error'
+                      ? 'Changes not saved. Edit again to retry.'
+                      : 'All changes saved'}
+                </div>
+                <div
+                  className={`citation-check ${unmatchedCitationIds.length ? 'needs-review' : ''}`}
+                >
                   <strong>
                     {unmatchedCitationIds.length
                       ? `${unmatchedCitationIds.length} source reference${unmatchedCitationIds.length === 1 ? '' : 's'} need review`
@@ -600,8 +723,8 @@ export default function ResearchRuns({
                         : 'No source references in this draft'}
                   </strong>
                   <span>
-                    Reference IDs are checked automatically. Open each passage to confirm it supports
-                    the surrounding claim.
+                    Reference IDs are checked automatically. Open each passage to confirm it
+                    supports the surrounding claim.
                   </span>
                   {unmatchedCitationIds.length > 0 && (
                     <button onClick={() => setView('evidence')}>Review evidence</button>
@@ -617,7 +740,7 @@ export default function ResearchRuns({
                   <textarea
                     className="run-markdown-editor"
                     value={editorValue}
-                    onChange={(event) => setEditorValue(event.target.value)}
+                    onChange={(event) => updateEditorValue(event.target.value)}
                     placeholder={
                       detail.status === 'completed'
                         ? 'The Final Editor draft will appear here.'
@@ -712,17 +835,45 @@ export default function ResearchRuns({
                       </div>
                       <button
                         onClick={() => {
-                          setEditorValue(draft.markdown);
+                          updateEditorValue(draft.markdown);
                           setPreview(false);
                           setView('report');
                         }}
                       >
-                        Restore this version
+                        Restore version
                       </button>
+                      <button onClick={() => setComparisonDraft(draft)}>Compare</button>
                     </article>
                   ))
                 ) : (
                   <p className="no-sources">No saved draft versions.</p>
+                )}
+                {comparisonDraft && (
+                  <section
+                    className="draft-diff"
+                    aria-label={`Changes since version ${comparisonDraft.version}`}
+                  >
+                    <header>
+                      <div>
+                        <strong>Version {comparisonDraft.version} → Current draft</strong>
+                        <small>Green lines were added. Red lines were removed.</small>
+                      </div>
+                      <button onClick={() => setComparisonDraft(null)}>Close comparison</button>
+                    </header>
+                    <div className="draft-diff-content">
+                      {draftDiff.map((item, index) => (
+                        <div
+                          className={`draft-diff-line ${item.added ? 'added' : item.removed ? 'removed' : ''}`}
+                          key={`${index}-${item.line.slice(0, 24)}`}
+                        >
+                          <span aria-hidden="true">
+                            {item.added ? '+' : item.removed ? '−' : ' '}
+                          </span>
+                          <code>{item.line || ' '}</code>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 )}
               </div>
             )}

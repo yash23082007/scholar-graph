@@ -19,6 +19,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",
     "cors": "^2.8.5",
+    "diff": "^9.0.0",
     "dompurify": "^3.4.17",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

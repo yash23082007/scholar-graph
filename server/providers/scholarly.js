@@ -28,6 +28,7 @@ function authorsFromOpenAlex(work) {
 }
 
 const requestCache = new Map();
+const maxCacheEntries = 500;
 let crossrefRequests = Promise.resolve();
 let lastCrossrefRequestAt = 0;
 
@@ -104,14 +105,27 @@ async function fetchJsonCached(url, options) {
   const ttl = cacheTtl();
   if (!ttl) return fetchJsonWithRetry(url, options);
   const key = String(url);
+  const now = Date.now();
   const cached = requestCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  if (cached && (cached.pending || cached.expiresAt > now)) return cached.promise;
   if (cached) requestCache.delete(key);
+
+  for (const [cacheKey, entry] of requestCache) {
+    if (!entry.pending && entry.expiresAt <= now) requestCache.delete(cacheKey);
+  }
+  while (requestCache.size >= maxCacheEntries) {
+    const oldestSettledKey = [...requestCache].find(([, entry]) => !entry.pending)?.[0];
+    if (!oldestSettledKey) break;
+    requestCache.delete(oldestSettledKey);
+  }
 
   const promise = fetchJsonWithRetry(url, options).then(
     (data) => {
       const entry = requestCache.get(key);
-      if (entry?.promise === promise) entry.expiresAt = Date.now() + ttl;
+      if (entry?.promise === promise) {
+        entry.pending = false;
+        entry.expiresAt = Date.now() + ttl;
+      }
       return data;
     },
     (error) => {
@@ -119,7 +133,7 @@ async function fetchJsonCached(url, options) {
       throw error;
     },
   );
-  requestCache.set(key, { expiresAt: Date.now() + ttl, promise });
+  requestCache.set(key, { expiresAt: 0, pending: true, promise });
   return promise;
 }
 

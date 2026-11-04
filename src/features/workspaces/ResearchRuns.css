@@ -487,6 +487,108 @@
   font-size: 8px;
   color: #8d9ab0;
 }
+.draft-save-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -2px 0 10px;
+  color: #69786d;
+  font-size: 12px;
+}
+.draft-save-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #57846a;
+}
+.draft-save-status.saving i {
+  background: #b78642;
+  animation: draft-save-pulse 1s ease-in-out infinite alternate;
+}
+.draft-save-status.error {
+  color: #a5483b;
+}
+.draft-save-status.error i {
+  background: #a5483b;
+}
+.draft-diff {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid #d9d4c9;
+  border-radius: 10px;
+  background: #fbfaf6;
+}
+.draft-diff > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e5e0d7;
+}
+.draft-diff > header > div {
+  display: grid;
+  gap: 4px;
+}
+.draft-diff > header strong {
+  color: #283b31;
+  font:
+    600 14px/1.4 Georgia,
+    serif;
+}
+.draft-diff > header small {
+  color: #77776e;
+  font-size: 12px;
+}
+.draft-diff > header button {
+  border: 0;
+  background: transparent;
+  color: #426c51;
+  font-size: 12px;
+  cursor: pointer;
+}
+.draft-diff-content {
+  max-height: 420px;
+  overflow: auto;
+  padding: 8px 0;
+}
+.draft-diff-line {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 8px;
+  padding: 2px 14px 2px 4px;
+  color: #45483f;
+  font:
+    12px/1.65 'DM Mono',
+    ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.draft-diff-line > span {
+  color: #96968d;
+  text-align: center;
+  user-select: none;
+}
+.draft-diff-line.added {
+  background: #e8f2e8;
+  color: #315a3b;
+}
+.draft-diff-line.added > span {
+  color: #3c7b4a;
+}
+.draft-diff-line.removed {
+  background: #f7e9e4;
+  color: #82433a;
+}
+.draft-diff-line.removed > span {
+  color: #ad594d;
+}
+@keyframes draft-save-pulse {
+  to {
+    opacity: 0.35;
+  }
+}
 .draft-history button {
   border: 1px solid #303c52;
   border-radius: 5px;
@@ -527,6 +629,9 @@
     max-height: 420px;
     overflow: auto;
   }
+  .draft-diff > header {
+    flex-direction: column;
+  }
 }
 @media print {
   body * {
@@ -566,4 +671,10 @@
     margin: 18mm;
   }
 }
-.evidence-coverage{display:block;margin-top:7px;color:#d0b97e;font-size:8px;line-height:1.6}
+.evidence-coverage {
+  display: block;
+  margin-top: 7px;
+  color: #d0b97e;
+  font-size: 8px;
+  line-height: 1.6;
+}

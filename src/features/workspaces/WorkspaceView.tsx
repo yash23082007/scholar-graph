@@ -43,11 +43,7 @@ type Answer = {
 type Props = { workspace: Workspace; user: User; onBack: () => void };
 const tabs = ['Overview', 'Documents', 'Ask', 'Reports', 'Instructions'];
 
-function renderLinkedAnswer(
-  text: string,
-  evidence: Evidence[],
-  onOpen: (id: string) => void,
-) {
+function renderLinkedAnswer(text: string, evidence: Evidence[], onOpen: (id: string) => void) {
   const validIds = new Set(evidence.map((item) => item.id));
   return text.split(/(\[E\d+\])/g).map((part, index) => {
     const match = part.match(/^\[(E\d+)\]$/);
@@ -171,6 +167,15 @@ export default function WorkspaceView({ workspace, user, onBack }: Props) {
     documentPage * documentPageSize,
   );
   const chosenDocuments = selectedIds.length ? selectedIds : readyDocuments.map((doc) => doc.id);
+  const attentionCount = documents.filter((doc) => doc.status !== 'ready').length;
+  const indexedPages = readyDocuments.reduce((total, doc) => total + doc.pages, 0);
+  const readiness = documents.length
+    ? Math.round((readyDocuments.length / documents.length) * 100)
+    : 0;
+
+  useEffect(() => {
+    setDocumentPage((page) => Math.min(page, documentTotalPages));
+  }, [documentTotalPages]);
 
   async function uploadFiles(files: FileList | File[]) {
     const allFiles = Array.from(files);
@@ -388,6 +393,33 @@ export default function WorkspaceView({ workspace, user, onBack }: Props) {
                   <strong>Private</strong>
                 </article>
               </div>
+              <section className="evidence-signal" aria-label="Evidence signal">
+                <div className="signal-copy">
+                  <span className="kicker">EVIDENCE SIGNAL</span>
+                  <h2>Your research base is {readiness}% ready.</h2>
+                  <p>
+                    ScholarGraph keeps the source trail visible before it helps you write. Every
+                    indexed page can become a passage you can inspect and cite.
+                  </p>
+                  <div className="signal-meta">
+                    <span>
+                      <strong>{indexedPages.toLocaleString()}</strong> indexed pages
+                    </span>
+                    <span>
+                      <strong>{attentionCount}</strong> need attention
+                    </span>
+                  </div>
+                </div>
+                <div className="signal-orbit" aria-hidden="true">
+                  <div className="signal-orbit-ring">
+                    <strong>{readiness}%</strong>
+                    <span>ready</span>
+                  </div>
+                  <i className="orbit-dot orbit-dot-one" />
+                  <i className="orbit-dot orbit-dot-two" />
+                  <i className="orbit-dot orbit-dot-three" />
+                </div>
+              </section>
               <div className="overview-grid">
                 <div className="overview-card">
                   <div>
@@ -634,7 +666,11 @@ export default function WorkspaceView({ workspace, user, onBack }: Props) {
                     )}
                   </div>
                   <p className="answer-copy">
-                    {renderLinkedAnswer(answer.answer, answer.evidence, setSelectedAnswerEvidenceId)}
+                    {renderLinkedAnswer(
+                      answer.answer,
+                      answer.evidence,
+                      setSelectedAnswerEvidenceId,
+                    )}
                   </p>
                   {answer.notice && <p className="answer-caveat">{answer.notice}</p>}
                   {answer.sourceWarnings.map((warning) => (

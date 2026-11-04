@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hashPassword, hashToken, isPublicWebUrl, newSessionToken, verifyPassword } from '../server/security.js';
+import {
+  hashPassword,
+  hashToken,
+  isPublicWebUrl,
+  newSessionToken,
+  verifyPassword,
+} from '../server/security.js';
+import { rateLimitKey } from '../server/rate-limit.js';
 
 test('password hashes verify only the original password', async () => {
   const encoded = await hashPassword('a-long-demo-password-123');
@@ -17,8 +24,23 @@ test('session token is opaque and stored as a one-way digest', () => {
   assert.equal(hashToken(first).length, 64);
 });
 
+test('shared rate limit keys do not expose client addresses or route text', () => {
+  const key = rateLimitKey('203.0.113.42', '/api/v1/auth/login');
+  assert.match(key, /^[a-f0-9]{64}$/);
+  assert.equal(key.includes('203.0.113.42'), false);
+  assert.notEqual(key, rateLimitKey('203.0.113.42', '/api/v1/auth/register'));
+});
+
 test('public URL validation rejects local/private network destinations', () => {
-  for (const url of ['http://127.0.0.1/admin', 'http://10.0.0.8/', 'http://192.168.1.1/', 'http://localhost/', 'http://service.internal/', 'file:///etc/passwd', 'https://user:pass@example.com/']) {
+  for (const url of [
+    'http://127.0.0.1/admin',
+    'http://10.0.0.8/',
+    'http://192.168.1.1/',
+    'http://localhost/',
+    'http://service.internal/',
+    'file:///etc/passwd',
+    'https://user:pass@example.com/',
+  ]) {
     assert.equal(isPublicWebUrl(url), false, url);
   }
   assert.equal(isPublicWebUrl('https://example.org/research'), true);

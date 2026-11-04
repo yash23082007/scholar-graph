@@ -149,7 +149,7 @@ export default function AuthGate() {
                   autoComplete="name"
                   required
                   maxLength={80}
-                  placeholder="Alex Morgan"
+                  placeholder="Your name"
                 />
               </label>
             )}
