@@ -231,7 +231,8 @@ function rateLimit({ windowMs = 15 * 60 * 1000, max = 20 } = {}) {
   return async (req, res, next) => {
     if (!mongoReady) return next();
     try {
-      const current = await consumeRateLimit(rateLimitKey(req.ip, req.path), { windowMs });
+      const scope = String(req.route?.path || req.path);
+      const current = await consumeRateLimit(rateLimitKey(req.ip, scope), { windowMs });
       const remaining = Math.max(0, max - current.count);
       res.setHeader('RateLimit-Limit', max);
       res.setHeader('RateLimit-Remaining', remaining);

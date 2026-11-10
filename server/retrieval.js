@@ -42,17 +42,33 @@ export function tokenize(text) {
 export function rankChunks(question, chunks, limit = 8) {
   const terms = [...new Set(tokenize(question))];
   if (!terms.length) return [];
-  return chunks
-    .map((chunk) => {
-      const content = tokenize(chunk.text);
-      const frequencies = new Map();
-      for (const word of content) frequencies.set(word, (frequencies.get(word) || 0) + 1);
-      const score = terms.reduce(
-        (sum, term) =>
-          sum + (frequencies.has(term) ? 1 + Math.min(2, frequencies.get(term) / 3) : 0),
-        0,
-      );
-      return { ...chunk, score };
+  const indexed = chunks.map((chunk) => {
+    const content = tokenize(chunk.text);
+    const frequencies = new Map();
+    for (const word of content) frequencies.set(word, (frequencies.get(word) || 0) + 1);
+    return { chunk, content, frequencies };
+  });
+  const documentFrequency = new Map(
+    terms.map((term) => [term, indexed.filter((item) => item.frequencies.has(term)).length]),
+  );
+  const averageLength =
+    indexed.reduce((sum, item) => sum + item.content.length, 0) / Math.max(1, indexed.length);
+  const k1 = 1.2;
+  const b = 0.75;
+
+  return indexed
+    .map(({ chunk, content, frequencies }) => {
+      const matchedTerms = terms.filter((term) => frequencies.has(term));
+      const score = matchedTerms.reduce((sum, term) => {
+        const frequency = frequencies.get(term);
+        const df = documentFrequency.get(term) || 0;
+        const inverseDocumentFrequency = Math.log1p((indexed.length - df + 0.5) / (df + 0.5));
+        const lengthNorm = 1 - b + b * (content.length / Math.max(1, averageLength));
+        return (
+          sum + inverseDocumentFrequency * ((frequency * (k1 + 1)) / (frequency + k1 * lengthNorm))
+        );
+      }, 0);
+      return { ...chunk, score, matchedTerms };
     })
     .filter((chunk) => chunk.score > 0)
     .sort((a, b) => b.score - a.score)
@@ -84,6 +100,7 @@ export function makeEvidenceAnswer(question, chunks) {
           ? 'web_page_extract'
           : 'user_uploaded_full_text'),
     sourceProvider: chunk.sourceProvider || null,
+    matchedTerms: chunk.matchedTerms || [],
     doi: chunk.doi || null,
     authors: chunk.authors || [],
     publishedAt: chunk.publishedAt || null,

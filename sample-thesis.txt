@@ -1,0 +1,31 @@
+Machine Learning Applications in Healthcare
+
+Abstract
+
+Machine learning has transformed healthcare diagnostics and treatment planning.
+This paper reviews recent advances in applying deep learning models to medical
+imaging, electronic health records, and personalized medicine.
+
+Deep Learning for Medical Imaging
+
+Convolutional neural networks have achieved radiologist-level accuracy in detecting
+pneumonia from chest X-rays. The model achieved 94.6% sensitivity and 93.2%
+specificity on a test dataset of 50,000 images. Transfer learning from ImageNet
+pre-trained models proved effective for medical image classification tasks.
+
+Electronic Health Record Analysis
+
+Natural language processing models extract clinical entities from physician notes
+with 89% F1 scores. Predictive models using EHR data can forecast patient
+readmission risk with 78% accuracy, enabling early intervention strategies.
+
+Personalized Medicine
+
+Genomic sequencing combined with ML models enables targeted therapy selection.
+Studies show that ML-guided treatment plans reduced adverse drug reactions by 35%
+and improved patient outcomes in oncology trials.
+
+Conclusion
+
+Machine learning in healthcare shows promise but requires careful validation,
+interpretability, and regulatory oversight before clinical deployment.

@@ -6,18 +6,24 @@ import path from 'node:path';
 import { makeEvidenceAnswer, rankChunks, tokenize } from '../server/retrieval.js';
 import { buildChunks, extractDocument, sha256 } from '../server/documents.js';
 
-test('lexical retrieval ranks exact research terms and excludes non-matches', () => {
+test('BM25 retrieval ranks rare matching terms above generic matches and excludes non-matches', () => {
   const chunks = [
     {
-      text: 'The experiment compared retrieval quality across the benchmark.',
+      text: 'The method and study examined a sample and reported results.',
+      documentName: 'Common.pdf',
+    },
+    {
+      text: 'Retrieval method quality was compared across the benchmark.',
       documentName: 'Methods.pdf',
     },
     { text: 'A general paragraph about research writing.', documentName: 'Notes.md' },
   ];
   assert.match(tokenize('Compare retrieval quality').join(' '), /retrieval/);
-  const ranked = rankChunks('retrieval quality', chunks);
-  assert.equal(ranked.length, 1);
+  const ranked = rankChunks('method retrieval', chunks);
+  assert.equal(ranked.length, 2);
   assert.equal(ranked[0].documentName, 'Methods.pdf');
+  assert.deepEqual(ranked[0].matchedTerms, ['method', 'retrieval']);
+  assert.equal(ranked[1].documentName, 'Common.pdf');
 });
 
 test('retrieval abstains when no source passage matches', () => {

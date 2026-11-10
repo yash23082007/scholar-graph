@@ -29,6 +29,7 @@ type Evidence = {
   doi?: string | null;
   authors?: string[];
   publishedAt?: string | null;
+  matchedTerms?: string[];
   excerpt: string;
 };
 type Answer = {
@@ -77,6 +78,7 @@ export default function WorkspaceView({ workspace, user, onBack }: Props) {
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [question, setQuestion] = useState('');
+  const [recentQuestions, setRecentQuestions] = useState<string[]>([]);
   const [sourceMode, setSourceMode] = useState<'documents_only' | 'documents_web'>(
     'documents_only',
   );
@@ -117,6 +119,18 @@ export default function WorkspaceView({ workspace, user, onBack }: Props) {
 
   useEffect(() => {
     void loadDocuments();
+  }, [workspace.id]);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(
+        localStorage.getItem(`scholargraph:questions:${workspace.id}`) || '[]',
+      );
+      setRecentQuestions(
+        Array.isArray(saved) ? saved.filter((item) => typeof item === 'string').slice(0, 6) : [],
+      );
+    } catch {
+      setRecentQuestions([]);
+    }
   }, [workspace.id]);
   useEffect(() => {
     api<{
@@ -229,6 +243,15 @@ export default function WorkspaceView({ workspace, user, onBack }: Props) {
       return;
     }
     setQuestion(clean);
+    setRecentQuestions((current) => {
+      const next = [clean, ...current.filter((item) => item !== clean)].slice(0, 6);
+      try {
+        localStorage.setItem(`scholargraph:questions:${workspace.id}`, JSON.stringify(next));
+      } catch {
+        // Keep the current session usable if browser storage is unavailable.
+      }
+      return next;
+    });
     setError('');
     setNotice('');
     setSelectedAnswerEvidenceId('');
@@ -635,7 +658,7 @@ export default function WorkspaceView({ workspace, user, onBack }: Props) {
                   <small>
                     {uploading
                       ? 'Files are indexing. You can ask now and the question will wait.'
-                      : 'Answers use only passages retrieved from selected sources.'}
+                      : 'A BM25 keyword search ranks passages against your original question. Open each passage to check its context.'}
                   </small>
                   <button
                     className="primary-action"
@@ -646,6 +669,16 @@ export default function WorkspaceView({ workspace, user, onBack }: Props) {
                   </button>
                 </div>
               </form>
+              {recentQuestions.length > 0 && (
+                <div className="recent-questions" aria-label="Recent questions">
+                  <span>Recent questions</span>
+                  {recentQuestions.slice(0, 4).map((item) => (
+                    <button key={item} type="button" onClick={() => void askQuestion(item)}>
+                      {item}
+                    </button>
+                  ))}
+                </div>
+              )}
               {answer && (
                 <section className="answer-card">
                   <div className="answer-header">
@@ -705,6 +738,17 @@ export default function WorkspaceView({ workspace, user, onBack }: Props) {
                             {item.section ? ` · ${item.section}` : ''}
                           </h4>
                           <blockquote>{item.excerpt}</blockquote>
+                          {!!item.matchedTerms?.length && (
+                            <div
+                              className="matched-terms"
+                              aria-label="Question terms found in this passage"
+                            >
+                              <span>Matched terms</span>
+                              {item.matchedTerms.map((term) => (
+                                <small key={term}>{term}</small>
+                              ))}
+                            </div>
+                          )}
                           {item.doi && (
                             <small className="evidence-coverage">
                               Coverage: {item.contentCoverage || 'metadata only'} · DOI {item.doi}
