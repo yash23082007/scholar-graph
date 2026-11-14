@@ -1,0 +1,260 @@
+# ScholarGraph Model Registry
+# Version: 1.0
+# Last Updated: 2026-11-10
+#
+# This file defines which models handle which roles in the system.
+# Roles are capabilities, not specific models. Each role has a primary
+# model and optional fallback chain.
+#
+# CRITICAL: Never hard-code model names in application code.
+# Always request by role (e.g., registry.getModel('planner'))
+
+version: "1.0"
+
+# Model definitions by role
+roles:
+  # Short evidence-based answers
+  answer:
+    primary:
+      provider: groq
+      model: "openai/gpt-oss-120b"
+      tier: mid
+    fallback:
+      - provider: gemini
+        model: "gemini-3.8-flash"
+        tier: mid
+    max_output_tokens: 900
+    temperature: 0.2
+    timeout_ms: 45000
+
+  # Planning: Task decomposition and sub-question generation
+  # Cheap tier: high volume, structured output
+  planner:
+    primary:
+      provider: groq
+      model: "openai/gpt-oss-120b"  # Replacement for deprecated llama-3.3-70b
+      tier: cheap
+    fallback:
+      - provider: gemini
+        model: "gemini-3.8-flash"
+        tier: cheap
+      - provider: groq
+        model: "openai/gpt-oss-20b"
+        tier: cheap
+    max_output_tokens: 2000
+    temperature: 0
+    timeout_ms: 25000
+    schema: "planner.v3"
+
+  # Extraction: Claim/entity extraction from generated text
+  # High volume, needs to be fast and cheap
+  extractor:
+    primary:
+      provider: gemini
+      model: "gemini-3.8-flash"
+      tier: cheap
+    fallback:
+      - provider: groq
+        model: "openai/gpt-oss-120b"
+        tier: cheap
+    max_output_tokens: 3000
+    temperature: 0
+    timeout_ms: 30000
+    schema: "claims.v2"
+
+  # Judge: Claim-support verification (before fine-tuned classifier)
+  # Volume can be high (hundreds per report), must be cheap
+  judge:
+    primary:
+      provider: gemini
+      model: "gemini-3.8-flash"
+      tier: cheap
+    fallback:
+      - provider: groq
+        model: "openai/gpt-oss-120b"
+        tier: cheap
+    max_output_tokens: 1000
+    temperature: 0
+    timeout_ms: 30000
+    schema: "verdict.v4"
+
+  # Synthesis: Main report writing
+  # The only role allowed to use frontier models
+  synthesis:
+    primary:
+      provider: groq
+      model: "openai/gpt-oss-120b"
+      tier: mid
+    fallback:
+      - provider: gemini
+        model: "gemini-3.8-flash"
+        tier: mid
+    max_output_tokens: 8000
+    temperature: 0.3
+    timeout_ms: 120000
+
+  # Skeptic: Adversarial critique (must differ from synthesis)
+  # Mid tier, deliberately different model family
+  skeptic:
+    primary:
+      provider: gemini
+      model: "gemini-3.8-flash"
+      tier: cheap
+    fallback:
+      - provider: groq
+        model: "openai/gpt-oss-20b"
+        tier: cheap
+    max_output_tokens: 2000
+    temperature: 0.1
+    timeout_ms: 60000
+    schema: "skeptic.v2"
+
+  # Researcher: Per-question dossier generation
+  researcher:
+    primary:
+      provider: groq
+      model: "openai/gpt-oss-120b"
+      tier: cheap
+    fallback:
+      - provider: gemini
+        model: "gemini-3.8-flash"
+        tier: cheap
+    max_output_tokens: 3000
+    temperature: 0.2
+    timeout_ms: 45000
+
+  # Writer: Section drafting
+  writer:
+    primary:
+      provider: groq
+      model: "openai/gpt-oss-120b"
+      tier: mid
+    fallback:
+      - provider: gemini
+        model: "gemini-3.8-flash"
+        tier: cheap
+    max_output_tokens: 4000
+    temperature: 0.3
+    timeout_ms: 60000
+
+  # Critic: Draft review and issue identification
+  critic:
+    primary:
+      provider: gemini
+      model: "gemini-3.8-flash"
+      tier: cheap
+    fallback:
+      - provider: groq
+        model: "openai/gpt-oss-120b"
+        tier: cheap
+    max_output_tokens: 2000
+    temperature: 0
+    timeout_ms: 45000
+
+  # Editor: Final draft refinement
+  editor:
+    primary:
+      provider: groq
+      model: "openai/gpt-oss-120b"
+      tier: mid
+    fallback:
+      - provider: gemini
+        model: "gemini-3.8-flash"
+        tier: cheap
+    max_output_tokens: 6000
+    temperature: 0.2
+    timeout_ms: 90000
+
+  # Embeddings: Chunk/entity embeddings (future: ML service)
+  # Local model preferred for cost and privacy
+  embed:
+    primary:
+      provider: local
+      model: "bge-m3"
+      tier: local
+    # No fallback - embeddings must be consistent
+
+  # Reranker: Cross-encoder passage reranking (future: ML service)
+  rerank:
+    primary:
+      provider: local
+      model: "bge-reranker-v2-m3"
+      tier: local
+    # No fallback - reranking is optional, not critical
+
+  # VLM Caption: Figure/table structured description (future)
+  vlm_caption:
+    primary:
+      provider: gemini
+      model: "gemini-3.8-flash"
+      tier: cheap
+    fallback:
+      - provider: groq
+        model: "openai/gpt-oss-120b"
+        tier: cheap
+    max_output_tokens: 500
+    temperature: 0
+    timeout_ms: 30000
+
+# Global policies
+policies:
+  # What to do when a model is not found
+  on_model_not_found:
+    - retry_fallback
+    - health_degrade
+    - alert
+
+  # Rate limit handling
+  on_rate_limit:
+    backoff: exponential_jitter
+    max_attempts: 3
+    then: fallback
+
+  # Schema validation failures
+  on_schema_violation:
+    repair_attempts: 1
+    then: escalate_to_next_model
+
+  # Cross-family critique: synthesis and skeptic must use different families
+  cross_family_critique: true
+
+  # Budget controls (per workspace, per day)
+  daily_budget_usd_per_workspace: 5.00
+
+  # Degrade to retrieval_only when budget reaches this fraction
+  degrade_to_retrieval_only_at: 0.90
+
+  # Require all critical roles healthy in production
+  require_critical_roles_in_production: true
+
+# Critical roles that must have at least one healthy model in production
+critical_roles:
+  - planner
+  - synthesis
+
+# Model tier definitions (for cost routing)
+# These are indicative; actual costs vary by provider and date
+tiers:
+  local:
+    description: "On-device or ML service models"
+    cost_multiplier: 0
+  cheap:
+    description: "High-volume tasks: extraction, classification, short synthesis"
+    approx_cost_per_1m_tokens: 0.50
+  mid:
+    description: "Main authoring and critique"
+    approx_cost_per_1m_tokens: 2.00
+  frontier:
+    description: "Reserved for final synthesis in 'deep' mode only"
+    approx_cost_per_1m_tokens: 10.00
+
+# Maintenance notes
+maintenance:
+  last_verified: "2026-11-10"
+  next_review: "2026-12-10"
+  drift_watchlist:
+    - "Groq model availability and pricing"
+    - "Gemini model versioning and rerouting"
+    - "OpenAlex API limits"
+  known_issues:
+    - "Startup checks registry structure and configured keys; it does not call provider APIs."

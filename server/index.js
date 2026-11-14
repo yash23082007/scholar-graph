@@ -1165,6 +1165,7 @@ api.post(
             )
             .join('\n\n');
           const generated = await generateText({
+            role: 'answer',
             provider:
               req.validatedBody.provider === 'retrieval_only'
                 ? undefined

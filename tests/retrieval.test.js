@@ -32,6 +32,19 @@ test('retrieval abstains when no source passage matches', () => {
   assert.equal(answer.evidence.length, 0);
 });
 
+test('evidence excerpts center the matching passage inside long chunks', () => {
+  const opening = 'Background context without the key terms. '.repeat(30);
+  const matchingPassage = 'The randomized trial measured retrieval quality in older adults.';
+  const result = makeEvidenceAnswer('retrieval quality', [
+    {
+      text: `${opening}${matchingPassage} More discussion follows with unrelated material.`,
+      matchedTerms: ['retrieval', 'quality'],
+    },
+  ]);
+  assert.match(result.evidence[0].excerpt, /randomized trial measured retrieval quality/);
+  assert.doesNotMatch(result.evidence[0].excerpt, /^Background context/);
+});
+
 test('section-aware chunks preserve page boundaries and content hashes', () => {
   const chunks = buildChunks([
     { page: 1, text: '# Methods\n\nWe used a randomized sample and preregistered analysis.' },

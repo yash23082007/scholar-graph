@@ -1,72 +1,78 @@
-const DEFAULT_GROQ_MODEL = 'llama-3.3-70b-versatile';
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+import {
+  configuredModelCandidates,
+  getModelRole,
+} from './model-registry.js';
 
-function providerName(requested) {
-  if (requested === 'groq' || requested === 'gemini') return requested;
-  const preferred = process.env.AI_PROVIDER;
-  if (preferred === 'groq' && process.env.GROQ_API_KEY) return preferred;
-  if (preferred === 'gemini' && process.env.GEMINI_API_KEY) return preferred;
-  if (process.env.GROQ_API_KEY) return 'groq';
-  if (process.env.GEMINI_API_KEY) return 'gemini';
-  return null;
+function preferredProvider() {
+  const requested = process.env.AI_PROVIDER;
+  if (
+    (requested === 'groq' || requested === 'gemini') &&
+    process.env[`${requested.toUpperCase()}_API_KEY`]
+  )
+    return requested;
+  return configuredModelCandidates('answer')[0]?.provider || null;
 }
 
-function providerCandidates(requested) {
-  if (requested === 'groq' || requested === 'gemini') return [requested];
-  const preferred = providerName();
-  const configured = ['groq', 'gemini'].filter((provider) =>
-    Boolean(process.env[`${provider.toUpperCase()}_API_KEY`]),
-  );
-  return preferred
-    ? [preferred, ...configured.filter((provider) => provider !== preferred)]
-    : configured;
+function providerCandidates(requested, role) {
+  const candidates = configuredModelCandidates(role, requested || null);
+  const preferred = requested || preferredProvider();
+  if (!preferred) return candidates;
+  return [
+    ...candidates.filter((candidate) => candidate.provider === preferred),
+    ...candidates.filter((candidate) => candidate.provider !== preferred),
+  ];
 }
 
-async function fetchJson(url, init, timeoutMs = 45_000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    let lastError;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const response = await fetch(url, { ...init, signal: controller.signal });
-        const data = await response.json().catch(() => ({}));
-        if (response.ok) return data;
-        const status = response.status;
-        const message =
-          data?.error?.message || data?.message || `Provider returned HTTP ${status}.`;
-        if (attempt === 0 && (status === 429 || status >= 500)) {
-          await new Promise((resolve) => setTimeout(resolve, 400));
-          continue;
-        }
-        throw Object.assign(new Error(message), { status });
-      } catch (error) {
-        lastError = error;
-        if (error.name === 'AbortError' || error.status || attempt > 0) throw error;
-      }
+async function fetchJson(url, init, timeoutMs) {
+  const configuredAttempts = Number.parseInt(process.env.PROVIDER_MAX_RETRIES || '2', 10);
+  const attempts = Number.isInteger(configuredAttempts)
+    ? Math.min(5, Math.max(1, configuredAttempts))
+    : 2;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) return data;
+      const status = response.status;
+      const message = data?.error?.message || data?.message || `Provider returned HTTP ${status}.`;
+      lastError = Object.assign(new Error(message), { status });
+      if (!(status === 408 || status === 429 || status >= 500) || attempt === attempts - 1)
+        throw lastError;
+    } catch (error) {
+      lastError = error;
+      const retryable = !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
+      if (!retryable || attempt === attempts - 1) throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    throw lastError || new Error('Provider request failed.');
-  } finally {
-    clearTimeout(timeout);
+    const backoff = Math.min(4000, 250 * 2 ** attempt) + Math.floor(Math.random() * 150);
+    await new Promise((resolve) => setTimeout(resolve, backoff));
   }
+  throw lastError || new Error('Provider request failed.');
 }
 
 export function configuredProviders() {
+  const answerCandidates = configuredModelCandidates('answer');
   return {
     groq: Boolean(process.env.GROQ_API_KEY),
     gemini: Boolean(process.env.GEMINI_API_KEY),
-    preferred: providerName(),
-    fallbackOrder: providerCandidates(),
+    preferred: preferredProvider(),
+    fallbackOrder: answerCandidates.map((candidate) => candidate.provider),
   };
 }
 
 async function generateWithProvider({
-  provider,
+  candidate,
   systemPrompt,
   userPrompt,
   temperature,
   maxOutputTokens,
+  timeoutMs,
 }) {
+  const { provider, model } = candidate;
   const headers = { 'Content-Type': 'application/json' };
   if (provider === 'groq') {
     if (!process.env.GROQ_API_KEY) {
@@ -74,7 +80,6 @@ async function generateWithProvider({
         code: 'PROVIDER_NOT_CONFIGURED',
       });
     }
-    const model = process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL;
     const data = await fetchJson('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { ...headers, Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
@@ -87,7 +92,7 @@ async function generateWithProvider({
           { role: 'user', content: userPrompt },
         ],
       }),
-    });
+    }, timeoutMs);
     const text = data.choices?.[0]?.message?.content;
     if (!text) throw new Error('The Groq response did not contain text.');
     return { text: String(text), provider, model: data.model || model, usage: data.usage || null };
@@ -98,7 +103,6 @@ async function generateWithProvider({
       code: 'PROVIDER_NOT_CONFIGURED',
     });
   }
-  const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const data = await fetchJson(url, {
     method: 'POST',
@@ -108,7 +112,7 @@ async function generateWithProvider({
       contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
       generationConfig: { temperature, maxOutputTokens },
     }),
-  });
+  }, timeoutMs);
   const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('');
   if (!text) throw new Error('The Gemini response did not contain text.');
   return {
@@ -121,12 +125,14 @@ async function generateWithProvider({
 
 export async function generateText({
   provider: requested,
+  role = 'answer',
   systemPrompt,
   userPrompt,
-  temperature = 0.2,
-  maxOutputTokens = 900,
+  temperature,
+  maxOutputTokens,
 }) {
-  const candidates = providerCandidates(requested);
+  const roleConfig = getModelRole(role);
+  const candidates = providerCandidates(requested, role);
   if (!candidates.length) {
     throw Object.assign(
       new Error(
@@ -135,19 +141,23 @@ export async function generateText({
       { code: 'NO_PROVIDER' },
     );
   }
+  const resolvedTemperature = temperature ?? roleConfig.temperature ?? 0.2;
+  const resolvedMaxOutputTokens = maxOutputTokens ?? roleConfig.max_output_tokens ?? 900;
+  const timeoutMs = roleConfig.timeout_ms || Number(process.env.PROVIDER_TIMEOUT_MS || 45_000);
   let lastError;
-  for (const provider of candidates) {
+  for (const candidate of candidates) {
     try {
       return await generateWithProvider({
-        provider,
+        candidate,
         systemPrompt,
         userPrompt,
-        temperature,
-        maxOutputTokens,
+        temperature: resolvedTemperature,
+        maxOutputTokens: resolvedMaxOutputTokens,
+        timeoutMs,
       });
     } catch (error) {
       lastError = error;
-      if (requested || error.code === 'PROVIDER_NOT_CONFIGURED') throw error;
+      if (error.code === 'PROVIDER_NOT_CONFIGURED') throw error;
     }
   }
   throw lastError || new Error('All configured AI providers failed.');

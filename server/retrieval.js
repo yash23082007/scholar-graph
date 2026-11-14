@@ -75,6 +75,38 @@ export function rankChunks(question, chunks, limit = 8) {
     .slice(0, limit);
 }
 
+function extractRelevantExcerpt(text, matchedTerms = [], maxLength = 900) {
+  const source = String(text || '');
+  if (source.length <= maxLength) return source;
+  const sentences = source.match(/[^.!?]+(?:[.!?]+|$)/gu) || [source];
+  const terms = matchedTerms.map((term) => term.toLocaleLowerCase());
+  let bestStart = 0;
+  let bestScore = 0;
+  for (let start = 0; start < sentences.length; start += 1) {
+    let window = '';
+    for (let end = start; end < sentences.length; end += 1) {
+      const candidate = `${window}${sentences[end]}`;
+      if (candidate.length > maxLength) break;
+      window = candidate;
+      const normalized = window.toLocaleLowerCase();
+      const score = terms.reduce((sum, term) => sum + (normalized.includes(term) ? 1 : 0), 0);
+      if (score > bestScore) {
+        bestScore = score;
+        bestStart = start;
+      }
+      if (score === terms.length && terms.length > 0) break;
+    }
+    if (bestScore === terms.length && terms.length > 0) break;
+  }
+  let excerpt = '';
+  for (let index = bestStart; index < sentences.length; index += 1) {
+    if (excerpt.length + sentences[index].length > maxLength) break;
+    excerpt += sentences[index];
+  }
+  if (!excerpt.trim()) excerpt = source.slice(0, maxLength);
+  return excerpt.trim();
+}
+
 export function makeEvidenceAnswer(question, chunks) {
   if (!chunks.length)
     return {
@@ -104,7 +136,7 @@ export function makeEvidenceAnswer(question, chunks) {
     doi: chunk.doi || null,
     authors: chunk.authors || [],
     publishedAt: chunk.publishedAt || null,
-    excerpt: chunk.text.slice(0, 900),
+    excerpt: extractRelevantExcerpt(chunk.text, chunk.matchedTerms),
   }));
   return {
     answer: `I found ${evidence.length} passage${evidence.length === 1 ? '' : 's'} that match your question. Review the excerpts below; this lexical retrieval result does not verify that a passage fully supports a conclusion.`,

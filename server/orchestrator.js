@@ -66,6 +66,7 @@ async function runStage(run, agent, input, evidenceIds) {
   });
   try {
     const generated = await generateText({
+      role: agent,
       provider,
       systemPrompt: prompt,
       userPrompt: input,
